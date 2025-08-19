@@ -1,0 +1,79 @@
+Project: DMlog/ActiveLog automated deploy loop
+Operator: Casey
+Region: us-west-2
+AWS CLI profile: activelog
+
+Objectives:
+- Build and validate a minimal, cost-safe, reproducible deploy path to EC2 with a single approval gate before launching.
+- Generate a PowerShell script out/launch_ec2.ps1 that:
+  - Uses profile “activelog” and region “us-west-2” on every AWS command.
+  - Resolves the latest Ubuntu 22.04 LTS AMI (owner Canonical).
+  - Uses instance type t3.micro by default.
+  - Creates or reuses a security group allowing:
+    - SSH (22) from current public IP only.
+    - HTTP (80) and HTTPS (443) from 0.0.0.0/0 only when deploying a web service.
+  - Generates a new SSH key pair locally (if not present) and imports the public key to AWS as an EC2 key pair.
+  - Is idempotent: re-running should not fail; it should detect and reuse resources.
+  - Writes a full transcript to ./logs.
+  - Prints a clear summary and next steps.
+
+Approval gate:
+- Before running any aws ec2 run-instances, stop and print:
+  - The exact command(s) that will execute.
+  - Instance type, AMI ID, SG rules, tags, storage, and key pair name.
+  - A brief cost note and reminder to stop/terminate when idle.
+  - A single command that the user runs to proceed: .\out\launch_ec2.ps1
+
+Required artifacts to generate:
+1) out/launch_ec2.ps1
+   - Behavior:
+     - Preflight checks: AWS CLI presence; profile activelog works; region us-west-2 set; writeable ./logs and ./out; OpenSSH client present.
+     - Determine current public IP via a reliable endpoint and format as CIDR /32.
+     - Compute names with stable prefixes: Project=ActiveLog, Owner=Casey.
+     - Resolve latest Ubuntu 22.04 LTS AMI in us-west-2 (owner Canonical 099720109477).
+     - Create or reuse a security group: activelog-sg-https if web ports needed; otherwise activelog-sg-ssh.
+       - Ingress: 22/tcp from <your-ip>/32.
+       - If web: 80/tcp and 443/tcp from 0.0.0.0/0.
+     - Create or reuse EC2 key pair named activelog-key-us-west-2 by importing the locally generated public key (see step 2).
+     - PAUSE: print the plan and exit unless the user passes -AutoApprove. Provide usage examples.
+     - If approved: create instance (t3.micro), 16–20 GB gp3 root volume, tags Project=ActiveLog, Owner=Casey, Name=activelog-node.
+     - Wait for running, fetch public IP/DNS, and print them.
+     - Optional: SCP a provided folder and run a remote bootstrap (only if instructed).
+     - Write all outputs and IDs to ./out/last-deploy.json.
+
+2) out/make_ssh_key.ps1
+   - If ~/.ssh/activelog-us-west-2 does not exist:
+     - Create a 4096-bit RSA key pair or ED25519 if available.
+     - Save private key at ~/.ssh/activelog-us-west-2 and public key at ~/.ssh/activelog-us-west-2.pub
+     - Set strict permissions on the private key.
+   - Print the public key path for import.
+
+3) out/import_keypair.ps1
+   - Imports ~/.ssh/activelog-us-west-2.pub as AWS key pair activelog-key-us-west-2 (idempotent).
+   - Verifies presence: aws ec2 describe-key-pairs …; if not exists, create.
+
+4) out/validate_env.ps1
+   - Checks:
+     - aws --version
+     - aws sts get-caller-identity --profile activelog --region us-west-2
+     - OpenSSH client (ssh, scp)
+     - Write access to ./out and ./logs
+   - Emits a compact OK summary or exact fixes if something’s missing.
+
+Conventions:
+- Every AWS CLI call includes: --profile activelog --region us-west-2
+- Scripts must use $ErrorActionPreference = "Stop" and try/catch around major steps.
+- Print short, high-signal status lines, then a final summary with actionable next steps.
+- Do not launch larger instances without explicit user instruction.
+
+Execution plan for you (Claude):
+1) Generate out/validate_env.ps1, out/make_ssh_key.ps1, out/import_keypair.ps1, and out/launch_ec2.ps1.
+2) Ask the user to run .\out\validate_env.ps1, then .\out\make_ssh_key.ps1, then .\out\import_keypair.ps1, and paste results.
+3) Present the EC2 launch plan (AMI, type, SG, key, tags). Pause for approval.
+4) After approval, instruct the user to run .\out\launch_ec2.ps1 [-AutoApprove].
+5) Report the instance details and next steps (SSH command, optional app upload/bootstrap, cost-minimizing stop/terminate commands).
+
+Notes:
+- If a public web service is not yet needed, do not open 80/443.
+- If ports are opened, also add a reminder to consider TLS and security updates.
+- For any deviation (e.g., GPU, larger instance, extra volumes), require explicit user instruction and approval.
