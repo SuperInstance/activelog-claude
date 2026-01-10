@@ -1,55 +1,36 @@
-﻿import os
-import json
-import subprocess
+﻿import json
+import os
 from datetime import datetime
-import requests
 
-GOALS_FILE = os.path.join(os.path.dirname(__file__), '..', 'goals.json')
-LOG_FILE = os.path.join(os.path.dirname(__file__), '..', 'activity.log')
-CLAUDE_API_KEY = os.environ.get("CLAUDE_API_KEY")  # Set in your env
-
-def log(message):
-    timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    with open(LOG_FILE, 'a', encoding='utf-8') as logf:
-        logf.write(f"[{timestamp}] {message}\n")
-    print(f"[{timestamp}] {message}")
+def log(message: str):
+    print(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {message}")
 
 def load_goals():
-    if os.path.exists(GOALS_FILE):
-        with open(GOALS_FILE, 'r', encoding='utf-8') as f:
-            return json.load(f)
-    return []
-
-def call_claude(prompt):
-    url = "https://api.anthropic.com/v1/messages"
-    headers = {
-        "x-api-key": CLAUDE_API_KEY,
-        "Content-Type": "application/json",
-        "anthropic-version": "2023-06-01"
-    }
-    body = {
-        "model": "claude-3-5-sonnet-latest",
-        "max_tokens": 800,
-        "messages": [{"role": "user", "content": prompt}]
-    }
-    response = requests.post(url, headers=headers, json=body)
-    response.raise_for_status()
-    data = response.json()
-    return data["content"][0]["text"]
+    """Load goals.json in a BOM-safe way, regardless of encoding."""
+    path = os.path.join(os.path.dirname(__file__), '..', 'goals.json')
+    with open(path, 'rb') as f:
+        raw = f.read()
+    if raw[:3] == b'\xef\xbb\xbf':
+        raw = raw[3:]
+    elif raw[:2] == b'\xff\xfe':
+        raw = raw[2:]
+        raw = raw.decode('utf-16le').encode('utf-8')
+    elif raw[:2] == b'\xfe\xff':
+        raw = raw[2:]
+        raw = raw.decode('utf-16be').encode('utf-8')
+    return json.loads(raw.decode('utf-8'))
 
 def run_goal(goal):
-    log(f"Processing goal: {goal}")
-    prompt = f"Write Python code to accomplish this goal:\n{goal}"
-    code = call_claude(prompt)
-    code_file = os.path.join(os.path.dirname(__file__), 'generated_task.py')
-    with open(code_file, 'w', encoding='utf-8') as cf:
-        cf.write(code)
-    log(f"Generated code file: {code_file}")
-    subprocess.run(["python", code_file], check=True)
+    log(f"Running goal: {goal}")
+    # Implement goal execution logic here
 
 def main():
     log("=== Autonomous Loop Start ===")
-    goals = load_goals()
+    try:
+        goals = load_goals()
+    except Exception as e:
+        log(f"Failed to load goals.json: {e}")
+        return
     if not goals:
         log("No goals in queue. Exiting.")
         return
